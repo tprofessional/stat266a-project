@@ -4,7 +4,9 @@ library(readr); library(dplyr); library(here)
 meta <- readr::read_tsv(here("data", "meta.tsv"))
 glimpse(meta)
 count(meta, biosample_id)
+
 sce  <- zellkonverter::readH5AD(here("data", "anndata.h5ad"))
+dim(sce)
 
 # compare nUMI and UMICount
 colnames(meta)
