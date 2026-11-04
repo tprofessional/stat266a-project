@@ -1,20 +1,44 @@
-library(dplyr); library(SummarizedExperiment)
+library(dplyr); library(tidyr); library(stringr); library(here)
+library(SummarizedExperiment)
 
-# align meta to sce
-all(colnames(sce) %in% meta$cellId)    # want TRUE
-anyDuplicated(meta$cellId)             # want 0
+# 1. Load + check dims / normalization
+meta <- readr::read_tsv(here("data", "meta.tsv"))
+sce  <- zellkonverter::readH5AD(here("data", "anndata.h5ad"))
+dim(sce)                      # genes x cells
+range(assay(sce))             # small non-integer values = log-normalized
+
+# 2. Make gene names unique (GENE, GENE.1, ...) without dropping any rows
+sum(duplicated(rownames(sce)))
+rownames(sce) <- make.unique(rownames(sce))
+
+# 3. Attach metadata by cellId
+stopifnot(all(colnames(sce) %in% meta$cellId), !anyDuplicated(meta$cellId))
 meta <- meta[match(colnames(sce), meta$cellId), ]
-all(colnames(sce) == meta$cellId)      # want TRUE
+stopifnot(all(colnames(sce) == meta$cellId))
+colData(sce) <- cbind(colData(sce), DataFrame(meta[, -1]))   # cellId is already the colnames
 
-# row counts
-dim(sce); nrow(meta)
-count(meta, biosample_id)
-count(meta, CellType, sort = TRUE)
+head(meta)
+dim(sce)
 
-# missing values
-colSums(is.na(meta))
+# 4. Parse biosample_id ("Share-1m-4") -> timepoint, age_days, organoid
+meta <- meta %>%
+  mutate(
+    timepoint = str_extract(biosample_id, "\\d+[dm]"),
+    organoid  = str_extract(biosample_id, "\\d+$"),
+    age_days  = as.numeric(str_extract(timepoint, "\\d+")) *
+                if_else(str_detect(timepoint, "m$"), 30, 1)
+  )
+dplyr::count(meta, biosample_id, timepoint, age_days, organoid)   # eyeball this
 
-# oddities
-assayNames(sce); range(assay(sce))     # confirms normalized, not raw counts
-sum(rowSums(assay(sce)) == 0)          # genes with zero expression
-summary(meta$nUMI); summary(meta$nGene)
+# 5. Standardize cell type labels (see options below)
+dplyr::count(meta, timepoint, CellType) %>% pivot_wider(names_from = timepoint, values_from = n)
+
+# 6. Per-cell QC
+meta <- meta %>%
+  mutate(
+    nGene_check = colSums(assay(sce) > 0),
+    mito_expr   = colMeans(assay(sce)[str_detect(rownames(sce), "^MT-"), , drop = FALSE]),
+    log10_nUMI  = log10(nUMI)
+  ) %>%
+  select(-`UMI Count`, -Cluster, -`Louvain Cluster`)
+summary(meta[, c("nGene", "nGene_check", "nUMI", "mito_expr")])
