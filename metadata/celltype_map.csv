@@ -1,0 +1,19 @@
+celltype_fine,celltype,lineage,note
+aRG,aRG,progenitor,apical radial glia
+oRG,oRG,progenitor,outer radial glia; appears from 2m
+IP,IP,progenitor,intermediate progenitor
+IPNewbornPN,IP,progenitor,1m only; IP and newborn neurons merged by the authors
+PreplateSubplate,DL_PN,neuron,d23 only; earliest-born deep-layer neurons
+Excitatory neu,DL_PN,neuron,d23 only; unsubtyped early excitatory neurons
+Immature DL PN,DL_PN,neuron,1m only
+CFuPN,DL_PN,neuron,corticofugal projection neurons (deep layer)
+Newborn CPN,UL_PN,neuron,callosal projection neurons (upper layer)
+CPN,UL_PN,neuron,callosal projection neurons (upper layer)
+Unspecified PN,Unspecified_PN,neuron,metabolically stressed core population per Uzquiano et al.
+Cajal Retzius,Cajal_Retzius,neuron,
+Cortical hem,Cortical_hem,other_dorsal,
+Subcortical progenitors,Non_cortical,non_cortical,
+Subcortical neurons,Non_cortical,non_cortical,
+Neural placode,Non_cortical,non_cortical,
+Mesenchyme,Non_cortical,non_cortical,
+Unknown,Unknown,unknown,
