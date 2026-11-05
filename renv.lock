@@ -25,12 +25,8 @@
       {
         "Name": "BioCbooks",
         "URL": "https://bioconductor.org/packages/3.22/books"
-        "URL": "https://packagemanager.posit.co/cran/latest"
       }
     ]
-  },
-  "Bioconductor": {
-    "Version": "3.22"
   },
   "Bioconductor": {
     "Version": "3.22"
