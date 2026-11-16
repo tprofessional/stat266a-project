@@ -40,3 +40,16 @@ results <- t(apply(gene_means, 1, fit_gene)) %>%
 
 # top 10 genes
 head(results, 10)
+
+# top gene
+top_gene <- results$gene[1]
+model_df <- data.frame(prop = y, expr = gene_means[top_gene, ],
+                       timepoint = y_tbl$timepoint)
+m <- lm(prop ~ expr, data = model_df)
+
+summary(m)
+confint(m)
+
+# residual diagnostics
+plot(m, which = 1)
+shapiro.test(resid(m))
