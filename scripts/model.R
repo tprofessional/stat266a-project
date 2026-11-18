@@ -39,10 +39,13 @@ results <- t(apply(gene_means, 1, fit_gene)) %>%
   arrange(desc(r2))
 
 # top 10 genes
+top10 <- head(results$gene, 10)
 head(results, 10)
 
 # top gene
 top_gene <- results$gene[1]
+top_gene
+
 model_df <- data.frame(prop = y, expr = gene_means[top_gene, ],
                        timepoint = y_tbl$timepoint)
 m <- lm(prop ~ expr, data = model_df)
@@ -51,5 +54,10 @@ summary(m)
 confint(m)
 
 # residual diagnostics
-plot(m, which = 1)
 shapiro.test(resid(m))
+plot(m, which = 1)
+
+ggplot(model_df, aes(expr, prop, color = timepoint)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE, color = "black")
+
+top10 <- head(results$gene, 10)
