@@ -1,0 +1,270 @@
+---
+title: "Running a regression analysis of brain organoid single-cell data"
+subtitle: "Which genes shift cell type composition in brain organoids?"
+author: "David Olmo Marchal, Trisha Moorkoth"
+date: 17-09-2026
+format:
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+    code-tools: true
+execute:
+  echo: true
+  warning: false
+---
+
+# The project at a glance
+
+**Question.** Which genes shift cell type composition in brain organoids?
+
+**Data.**
+
+| File in `data/` | Source (link) | Format | License / terms |
+|------------------|------------------|------------------|------------------|
+| `dataset.json` | [Ana Uzquiano & Paola Arlotta -- Arlotta Lab at Broad Institute](www.cell.com/cell/fulltext/S0092-8674(22)01168-0) | tsv | Elsevier License |
+
+```{r setup}
+library(dplyr); library(tidyr); library(stringr); library(ggplot2); library(here)
+library(SummarizedExperiment); library(scuttle)
+
+# Bioconductor packages mask some dplyr functions; make dplyr's versions win
+count  <- dplyr::count
+select <- dplyr::select
+filter <- dplyr::filter
+```
+
+## Question
+
+Given the change in expression of genes over time, what genes shift cell type composition in brain organoids the most?
+
+## Description of Data
+
+Our dataset comes from a SHARE-seq dataset from the paper published by Uzquiano et al. (2022). We found this dataset on the UCSC Cell Browser and decided to use it due to its 4 monthly timepoints.
+
+The dataset itself covers 12 human cortical organoids which come from the three organoids at each of the 4 ages (day 23, 1 month, 2 months and 3 months). Since each organoid was profiled and sequenced separately, we're using the organoid as our unit of replication and identification.
+
+```{r load}
+meta <- readr::read_tsv(here("data", "meta.tsv"))
+sce  <- zellkonverter::readH5AD(here("data", "anndata.h5ad"))
+glimpse(meta)
+```
+
+In terms of columns in the SHARE-seq dataset, there are cell IDs, biosample_id, nGene (number of unique genes per cell), nUMI (number of unique RNA transcripts in a cell), CellType metadata, Clusters (based on gene expression), UMI counts and supplementary gene expression clustering with Louvain Clusters.
+
+The raw data itself comes from UMI (Unique Molecular Identifier) counts for 27,583 cells across the 59,409 genes identified. Each cell was labeled by the authors as one of the 18 cell types which in data cleaning we bring down to 6 broader cell types for simplified analysis.
+
+```{r checks}
+dim(sce)                              # genes x cells in the object used here
+nrow(meta)                            # cells in the metadata
+colSums(is.na(meta))                  # missing values per column
+summary(meta$nUMI - meta$`UMI Count`) # the two UMI columns differ only slightly
+```
+
+## Data Cleaning
+
+1.  First we loaded the data and checked matrix dimensions (genes x cells).
+    a.  It contained 59,409 genes x 27,583 cells.
+    b.  Values were already log-normalized
+2.  We made the gene names unique since some gene symbols appear more than once in the annotation.
+    a.  For duplicates we added a suffix Ex. GENE.1, so we don't drop any counts.
+3.  We attached cell metadata included in the dataset's meta.tsv to match the cell Ids, since each cell has to be matched to an organoid, timepoint and cell type.
+4.  We then parsed the timepoints and ages from the biosample_id, so we can insert it into a table and use it later
+    a.  Ex Share-1m-4 is split into timepoint (1m), age_days, and organoid ID
+5.  We standardized cell type labels since they were annotated per timepoint instead of globally.
+6.  Calculated the per-cell quality metrics (genes which are reported but not very expressed) with scuttle library to find low counts of genes
+7.  Then we kept genes that had a count \> 0 in at least 10 cells. We did this to remove noise created by genes that are only seen in a handful of cells instead of globally.
+    a.  After cleaning this brought down the number of genes from 59,409 to 46,319.
+
+```{=html}
+<!-- CHECK: the code below runs on the 3,183-gene object used for the regression.
+Every gene there was already detected in at least ~125 cells, so the 10-cell filter
+removes 0 genes in this object. -->
+```
+
+```{r cleaning-code}
+# Step 2: unique gene names
+rownames(sce) <- make.unique(rownames(sce))
+
+# Step 3: match metadata to cells (same order as the matrix columns)
+stopifnot(all(colnames(sce) %in% meta$cellId), !anyDuplicated(meta$cellId))
+meta <- meta[match(colnames(sce), meta$cellId), ]
+stopifnot(all(colnames(sce) == meta$cellId))
+meta <- meta %>% select(-`UMI Count`, -Cluster, -`Louvain Cluster`)
+
+# Step 4: parse biosample_id into timepoint, age_days, organoid
+meta <- meta %>%
+  mutate(
+    timepoint = str_extract(biosample_id, "(d\\d+|\\d+m)"),
+    organoid  = str_extract(biosample_id, "\\d+$"),
+    age_days  = case_when(
+      str_starts(timepoint, "d") ~ as.numeric(str_remove(timepoint, "d")),
+      str_ends(timepoint, "m")   ~ as.numeric(str_remove(timepoint, "m")) * 30
+    ),
+    timepoint = factor(timepoint, levels = c("d23", "1m", "2m", "3m"))
+  )
+
+# Step 5: standardize cell type labels into broader classes
+meta <- meta %>%
+  mutate(cell_class = case_when(
+    CellType %in% c("aRG", "oRG")                            ~ "Radial glia",
+    CellType %in% c("IP", "IPNewbornPN")                     ~ "Intermediate progenitors",
+    CellType %in% c("Newborn CPN", "CPN", "CFuPN", "Immature DL PN",
+                    "Unspecified PN", "Excitatory neu")      ~ "Excitatory neurons",
+    CellType %in% c("Subcortical neurons", "Subcortical progenitors") ~ "Subcortical",
+    CellType == "Cajal Retzius"                              ~ "Cajal-Retzius",
+    CellType %in% c("Cortical hem", "Mesenchyme", "Neural placode",
+                    "PreplateSubplate")                      ~ "Other",
+    CellType == "Unknown"                                    ~ NA_character_
+  ))
+
+# Steps 6-7: quality metrics and the >= 10 cell gene filter
+cell_qc <- perCellQCMetrics(sce, assay.type = 1)
+gene_qc <- perFeatureQCMetrics(sce, assay.type = 1)
+meta$n_genes_detected <- cell_qc$detected
+keep <- Matrix::rowSums(assay(sce) > 0) >= 10
+c(genes_before = nrow(sce), genes_after = sum(keep))
+sce <- sce[keep, ]
+
+# Remove Unknown cells for the composition analysis
+meta_clean <- meta %>% filter(!is.na(cell_class))
+c(cells_removed = nrow(meta) - nrow(meta_clean), cells_total = nrow(meta))
+sce_clean <- sce[, meta_clean$cellId]
+
+# Composition table: proportion of each cell class within each organoid
+comp <- meta_clean %>%
+  count(biosample_id, timepoint, age_days, cell_class) %>%
+  group_by(biosample_id) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+stopifnot(all(abs(tapply(comp$prop, comp$biosample_id, sum) - 1) < 1e-8))
+```
+
+```{r organoid-counts}
+meta %>%
+  count(biosample_id, name = "cells") %>%
+  knitr::kable(caption = "Cells per organoid before removing Unknown cells")
+```
+
+There are some limitations to the data. The data itself does not have an even distribution of cells per timepoint but this will likely not affect the analysis since we are looking at global cell type composition and gene shifts through time. We did have to manually standardize some of the cell type labels because they differed from time point to time point.
+
+```{=html}
+<!-- ADD (one sentence, required "what we checked" note): 2,295 of 27,583 cells
+(8.3%) were labeled Unknown and were excluded from the composition analysis. -->
+```
+
+## Plots
+
+### Figure #1: Cell type composition shifts across organoid age
+
+```{r fig-composition, fig.width=9, fig.height=5}
+#| label: fig-composition
+#| fig-cap: "Cell type composition shifts across organoid age. Each bar is one organoid; panels group organoids by timepoint."
+ggplot(comp, aes(x = biosample_id, y = prop, fill = cell_class)) +
+  geom_col() +
+  facet_grid(~ timepoint, scales = "free_x", space = "free_x") +
+  labs(title = "Cell type composition shifts across organoid age",
+       x = "Organoid (biosample)", y = "Proportion of cells",
+       fill = "Cell class") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+This figure shows the different cell types that exist inside our organoids and how through time they change in composition. In the beginning the organoids have just begun differentiating and so they have a lot of early stage neuron types like radial glia and progenitors. As they develop they begin to have a decrease in radial glia and increase in mature Excitatory Neurons. Later we will perform the regression analysis focused on the Excitatory Neuron class because its change in composition over the time points is the most significant.
+
+We chose this type of plot because it's easy to visualize and understand one of the important changing data points of our project which is cell type composition. It allows the viewer to quickly understand one of the main trends involved in organoid maturation and how genes could play a role in it.
+
+### Figure #2: Change in expression of top ranked genes over time
+
+![Change in expression of top ranked genes over time. Points are organoids, line connects timepoint means.](figures/fig2_top_genes.png){#fig-genes fig-alt="Eight panels, one per gene, showing mean expression per organoid at d23, 1m, 2m and 3m."}
+
+This figure shows how the average expression in each organoid of the 8 genes that change most consistently with age moves in the span of 4 timepoints (23 days through 3 months), and how those changes could reflect the shift in cell type mix more than changes inside individual cells.
+
+We chose this plot because it's able to show the direction, timing and consistency across the replicate organoids of the strongest age related gene changes which in combination with the cell composition begins to answer our main question.
+
+## Regression
+
+For each of the 3,183 genes, we fit a linear regression of the excitatory neuron proportion on the gene's z-scored mean expression across the 12 organoids, ranked genes by R^2^, and adjusted p-values with Benjamini-Hochberg. The top gene was PPP1R3C (R^2^ = 0.97, p_adj = 2.8e-05); in an unscaled model its slope was 20.7 (95% CI 18.0 to 23.4), meaning each 0.01 increase in mean expression goes with about a 0.21 increase in excitatory neuron proportion. The other top genes had similar R^2^ (0.90 to 0.95) and equal-sized slopes in opposite directions, which suggests they follow the same developmental trend. Residuals showed a slight curve and some fitted proportions fell below zero, but residual error was small (0.062) and Shapiro-Wilk gave p = 0.86. Limitations: only 12 organoids, organoids within a timepoint are not independent, we selected the best of thousands of genes, and the results show association, not causation. A binomial GLM and a model adjusting for timepoint would be next steps.
+
+```{r model-setup}
+# Mean expression of each gene within each organoid (genes x 12)
+cells_by_organoid <- split(seq_len(ncol(sce_clean)), meta_clean$biosample_id)
+gene_means <- sapply(cells_by_organoid,
+                     function(i) Matrix::rowMeans(assay(sce_clean)[, i]))
+
+# Outcome: proportion of excitatory neurons per organoid
+y_tbl <- comp %>%
+  complete(biosample_id, cell_class, fill = list(n = 0, prop = 0)) %>%
+  filter(cell_class == "Excitatory neurons") %>%
+  arrange(match(biosample_id, colnames(gene_means)))
+stopifnot(all(y_tbl$biosample_id == colnames(gene_means)))
+y <- y_tbl$prop
+```
+
+```{r model-all-genes}
+fit_gene <- function(x) {
+  x <- as.numeric(scale(x))
+  s <- summary(lm(y ~ x))
+  c(slope = s$coefficients["x", "Estimate"],
+    p     = s$coefficients["x", "Pr(>|t|)"],
+    r2    = s$r.squared)
+}
+
+results <- t(apply(gene_means, 1, fit_gene)) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  mutate(p_adj = p.adjust(p, method = "BH")) %>%
+  arrange(desc(r2))
+
+knitr::kable(head(results, 10), digits = 4,
+             caption = "Top 10 genes ranked by R^2^ for excitatory neuron proportion (slope is per 1 SD of expression)")
+```
+
+```{r top-gene}
+top_gene <- results$gene[1]
+model_df <- data.frame(prop = y, expr = gene_means[top_gene, ],
+                       timepoint = y_tbl$timepoint)
+m <- lm(prop ~ expr, data = model_df)
+summary(m)
+confint(m)
+range(model_df$expr)
+```
+
+```{r scatter, fig.width=6, fig.height=4}
+ggplot(model_df, aes(expr, prop, color = timepoint)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  labs(title = paste("Excitatory neuron proportion vs", top_gene, "expression"),
+       x = "Mean expression per organoid (log-normalized)",
+       y = "Excitatory neuron proportion",
+       caption = "Each point is one organoid.") +
+  theme_minimal()
+```
+
+### Assumption checks
+
+```{r diagnostics, fig.width=6, fig.height=4}
+plot(m, which = 1)   # linearity and constant variance
+plot(m, which = 2)   # normality of residuals
+plot(m, which = 4)   # influential points
+shapiro.test(resid(m))
+```
+
+- **Linearity and constant variance:** the residuals vs fitted plot shows a slight curve, but residuals are small (within about 0.1) and the spread is roughly even. With only 12 points the smoother is unstable. Some fitted proportions are slightly below zero because a linear model does not respect the 0 to 1 bounds of a proportion.
+- **Normality:** Shapiro-Wilk gave p = 0.86, so there is no evidence against normality, though with n = 12 the test has little power.
+- **Influential points:** \[one sentence from the Cook's distance plot\]
+- **Independence:** probably violated, since organoids from the same timepoint are more alike than organoids from different timepoints.
+
+Note: The regression analysis was performed with a subset of the full dataset due to limited compute power (3,183 genes versus 46,319 after cleaning). This resulted in a different set of top 10 genes than what is discussed in the Figure #1 and #2 plots. For future development we will perform the regression on the full dataset.
+
+## AI Use
+
+and single cell experiment modeling. Used AI to debug the plotting section, had issues with displaying all 8 genes.
+
+explore different regression models and whether they would align with the question we had. It helped me find gaps that I have addressed within the report.
+
+## Contribution Statements
+
+cleaning portion and data description sections of the mid-quarter report. Wrote the code for plot #2 of the analysis, specifically the change in gene expression of the genes that change the most consistently over time.
+
+preliminary data loading and processing script. Wrote code for plot #1 of the analysis. Wrote code and description of the regression analysis. Revised report to account for differences in datasets used during analysis ([partner](Plan%20for%20the%20data%20cleaning%20portion%20of%20the%20project.%20Wrote%20the%20data) used a larger subset of genes than I did).
