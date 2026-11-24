@@ -1,5 +1,5 @@
 ---
-title: "Running a regression analysis of brain organoid single-cell data"
+title: "Gene expression analysis over time in brain organoids"
 subtitle: "Which genes shift cell type composition in brain organoids?"
 author: "David Olmo Marchal, Trisha Moorkoth"
 date: 17-09-2026
@@ -13,16 +13,6 @@ execute:
   echo: true
   warning: false
 ---
-
-# The project at a glance
-
-**Question.** Which genes shift cell type composition in brain organoids?
-
-**Data.**
-
-| File in `data/` | Source (link) | Format | License / terms |
-|------------------|------------------|------------------|------------------|
-| `dataset.json` | [Ana Uzquiano & Paola Arlotta -- Arlotta Lab at Broad Institute](www.cell.com/cell/fulltext/S0092-8674(22)01168-0) | tsv | Elsevier License |
 
 ```{r setup}
 library(dplyr); library(tidyr); library(stringr); library(ggplot2); library(here)
@@ -77,7 +67,7 @@ summary(meta$nUMI - meta$`UMI Count`) # the two UMI columns differ only slightly
     a.  After cleaning this brought down the number of genes from 59,409 to 46,319.
 
 ```{=html}
-<!-- NOTE: the code below runs on the 3,183-gene object used for the regression.
+<!-- CHECK: the code below runs on the 3,183-gene object used for the regression.
 Every gene there was already detected in at least ~125 cells, so the 10-cell filter
 removes 0 genes in this object. -->
 ```
@@ -146,15 +136,22 @@ meta %>%
   knitr::kable(caption = "Cells per organoid before removing Unknown cells")
 ```
 
-There are some limitations to the data. The data itself does not have an even distribution of cells per timepoint but this will likely not affect the analysis since we are looking at global cell type composition and gene shifts through time. We did have to manually standardize some of the cell type labels because they differed from time point to time point. Also, 2,295 of 27,583 cells (8.3%) were labeled Unknown and were excluded from the composition analysis.
+There are some limitations to the data. The data itself does not have an even distribution of cells per timepoint but this will likely not affect the analysis since we are looking at global cell type composition and gene shifts through time. We did have to manually standardize some of the cell type labels because they differed from time point to time point.
+
+```{=html}
+<!-- ADD (one sentence, required "what we checked" note): 2,295 of 27,583 cells
+(8.3%) were labeled Unknown and were excluded from the composition analysis. -->
+```
 
 ## Plots
 
 ### Figure #1: Cell type composition shifts across organoid age
 
-```{r fig-composition, fig.width=9, fig.height=5}
+```{r fig-composition}
 #| label: fig-composition
 #| fig-cap: "Cell type composition shifts across organoid age. Each bar is one organoid; panels group organoids by timepoint."
+#| fig-width: 9
+#| fig-height: 5
 ggplot(comp, aes(x = biosample_id, y = prop, fill = cell_class)) +
   geom_col() +
   facet_grid(~ timepoint, scales = "free_x", space = "free_x") +
@@ -171,7 +168,47 @@ We chose this type of plot because it's easy to visualize and understand one of 
 
 ### Figure #2: Change in expression of top ranked genes over time
 
-![Change in expression of top ranked genes over time. Points are organoids, line connects timepoint means.](figures/fig2_top_genes.png){#fig-genes fig-alt="Eight panels, one per gene, showing mean expression per organoid at d23, 1m, 2m and 3m."}
+To pick the genes, we calculated each gene's mean expression per organoid, dropped barely expressed genes (mean of 0.1 or less), and ranked the rest with a limma F-test for any difference in expression across the four timepoints. The 8 top-ranked genes are shown.
+
+```{r fig-genes}
+#| label: fig-genes
+#| fig-cap: "Change in expression of top ranked genes over time. Points are organoids, line connects timepoint means."
+#| fig-width: 10
+#| fig-height: 5
+
+# Mean expression of each gene within each organoid (genes x organoids)
+pb <- scuttle::summarizeAssayByGroup(sce_clean, ids = meta_clean$biosample_id,
+                                     statistics = "mean", assay.type = 1)
+
+sample_info <- meta_clean %>%
+  distinct(biosample_id, timepoint, age_days, organoid) %>%
+  arrange(timepoint, organoid)
+
+pb_mat <- assay(pb, "mean")[, sample_info$biosample_id]   # genes x organoids, ordered by age
+
+# Rank genes by change across timepoints (F-test across all timepoints)
+expressed <- rowMeans(pb_mat) > 0.1                       # drop barely expressed genes
+design    <- model.matrix(~ timepoint, data = sample_info)
+fit_age   <- limma::eBayes(limma::lmFit(pb_mat[expressed, ], design))
+top_age   <- limma::topTable(fit_age, coef = 2:ncol(design), number = Inf, sort.by = "F")
+line_genes <- rownames(top_age)[1:8]
+
+# Long table for ggplot
+line_df <- as.data.frame(pb_mat[line_genes, , drop = FALSE]) %>%
+  tibble::rownames_to_column("gene") %>%
+  pivot_longer(-gene, names_to = "biosample_id", values_to = "expr") %>%
+  left_join(sample_info, by = "biosample_id") %>%
+  mutate(gene = factor(gene, levels = line_genes))
+
+ggplot(line_df, aes(timepoint, expr)) +
+  geom_point(alpha = 0.6, position = position_jitter(width = 0.1, height = 0)) +
+  stat_summary(fun = mean, geom = "line", aes(group = 1), linewidth = 0.8) +
+  facet_wrap(~ gene, scales = "free_y", ncol = 4) +
+  labs(title = "Change in expression of top-ranked genes over time",
+       x = "Timepoint", y = "Mean expression per organoid (log-based)",
+       caption = "Points are organoids, line connects timepoint means.") +
+  theme_minimal()
+```
 
 This figure shows how the average expression in each organoid of the 8 genes that change most consistently with age moves in the span of 4 timepoints (23 days through 3 months), and how those changes could reflect the shift in cell type mix more than changes inside individual cells.
 
@@ -250,7 +287,7 @@ shapiro.test(resid(m))
 - **Influential points:** \[one sentence from the Cook's distance plot\]
 - **Independence:** probably violated, since organoids from the same timepoint are more alike than organoids from different timepoints.
 
-Note: The regression analysis was performed with a subset of the full dataset due to limited compute power (3,183 genes versus 46,319 after cleaning). This resulted in a different set of top 10 genes than what is discussed in the Figure #1 and #2 plots. For future development we will perform the regression on the full dataset.
+Note: The regression analysis was performed with a subset of the full dataset due to limited compute power (3,183 genes versus 46,319 after cleaning). Figure #2 is computed from the same 3,183-gene object. Its genes are ranked by change across timepoints (F-test), while the regression ranks genes by how well they track excitatory neuron proportion (R^2^), so the two top-gene lists differ. For future development we will perform the analysis on the full dataset.
 
 ## AI Use
 
@@ -260,6 +297,6 @@ explore different regression models and whether they would align with the questi
 
 ## Contribution Statements
 
-David: cleaning portion and data description sections of the mid-quarter report. Wrote the code for plot #2 of the analysis, specifically the change in gene expression of the genes that change the most consistently over time.
+cleaning portion and data description sections of the mid-quarter report. Wrote the code for plot #2 of the analysis, specifically the change in gene expression of the genes that change the most consistently over time.
 
-Trisha: preliminary data loading and processing script. Wrote code for plot #1 of the analysis. Wrote code and description of the regression analysis. Revised report to account for differences in datasets used during analysis (David used the full set of genes rather than the subset I used, thus had different top gene results).
+preliminary data loading and processing script. Wrote code for plot #1 of the analysis. Wrote code and description of the regression analysis. Revised report to account for differences in datasets used during analysis ([partner](Plan%20for%20the%20data%20cleaning%20portion%20of%20the%20project.%20Wrote%20the%20data) used a larger subset of genes than I did).
