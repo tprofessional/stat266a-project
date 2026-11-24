@@ -77,7 +77,7 @@ summary(meta$nUMI - meta$`UMI Count`) # the two UMI columns differ only slightly
     a.  After cleaning this brought down the number of genes from 59,409 to 46,319.
 
 ```{=html}
-<!-- CHECK: the code below runs on the 3,183-gene object used for the regression.
+<!-- NOTE: the code below runs on the 3,183-gene object used for the regression.
 Every gene there was already detected in at least ~125 cells, so the 10-cell filter
 removes 0 genes in this object. -->
 ```
@@ -146,12 +146,7 @@ meta %>%
   knitr::kable(caption = "Cells per organoid before removing Unknown cells")
 ```
 
-There are some limitations to the data. The data itself does not have an even distribution of cells per timepoint but this will likely not affect the analysis since we are looking at global cell type composition and gene shifts through time. We did have to manually standardize some of the cell type labels because they differed from time point to time point.
-
-```{=html}
-<!-- ADD (one sentence, required "what we checked" note): 2,295 of 27,583 cells
-(8.3%) were labeled Unknown and were excluded from the composition analysis. -->
-```
+There are some limitations to the data. The data itself does not have an even distribution of cells per timepoint but this will likely not affect the analysis since we are looking at global cell type composition and gene shifts through time. We did have to manually standardize some of the cell type labels because they differed from time point to time point. Also, 2,295 of 27,583 cells (8.3%) were labeled Unknown and were excluded from the composition analysis.
 
 ## Plots
 
@@ -265,6 +260,6 @@ explore different regression models and whether they would align with the questi
 
 ## Contribution Statements
 
-cleaning portion and data description sections of the mid-quarter report. Wrote the code for plot #2 of the analysis, specifically the change in gene expression of the genes that change the most consistently over time.
+David: cleaning portion and data description sections of the mid-quarter report. Wrote the code for plot #2 of the analysis, specifically the change in gene expression of the genes that change the most consistently over time.
 
-preliminary data loading and processing script. Wrote code for plot #1 of the analysis. Wrote code and description of the regression analysis. Revised report to account for differences in datasets used during analysis ([partner](Plan%20for%20the%20data%20cleaning%20portion%20of%20the%20project.%20Wrote%20the%20data) used a larger subset of genes than I did).
+Trisha: preliminary data loading and processing script. Wrote code for plot #1 of the analysis. Wrote code and description of the regression analysis. Revised report to account for differences in datasets used during analysis (David used the full set of genes rather than the subset I used, thus had different top gene results).
